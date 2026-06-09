@@ -46,6 +46,7 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import okhttp3.ResponseBody;
 
 public class LibreLinkUp {
     private AuthTicket authTicket;
@@ -215,10 +216,21 @@ public class LibreLinkUp {
                 .build();
 
         try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful())
-                throw new IOException("Unexpected code " + response);
+            ResponseBody responseBody = response.body();
+            if (responseBody == null) {
+                throw new IOException("Empty response body");
+            }
 
-            return loginResultJsonAdapter.fromJson(response.body().string());
+            LoginResult result = loginResultJsonAdapter.fromJson(responseBody.string());
+            if (result != null) {
+                return result;
+            }
+
+            if (!response.isSuccessful()) {
+                throw new IOException("Unexpected code " + response);
+            }
+
+            throw new IOException("Unable to parse login response");
         }
     }
 
@@ -235,10 +247,21 @@ public class LibreLinkUp {
                 .build();
 
         try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful())
-                throw new IOException("Unexpected code " + response);
+            ResponseBody responseBody = response.body();
+            if (responseBody == null) {
+                throw new IOException("Empty response body");
+            }
 
-            return connectionsResultJsonAdapter.fromJson(response.body().string());
+            ConnectionsResult result = connectionsResultJsonAdapter.fromJson(responseBody.string());
+            if (result != null) {
+                return result;
+            }
+
+            if (!response.isSuccessful()) {
+                throw new IOException("Unexpected code " + response);
+            }
+
+            throw new IOException("Unable to parse connections response");
         }
     }
 
@@ -297,14 +320,14 @@ public class LibreLinkUp {
 
     public static class LoginResult extends LibreLinkUpResult {
         public static class LoginResultData {
-            User user;
-            AuthTicket authTicket;
+            public User user;
+            public AuthTicket authTicket;
         };
-        LoginResultData data;
+        public LoginResultData data;
     }
 
     public static class ConnectionsResult extends LibreLinkUpResult {
-        List<Connection> data;
-        AuthTicket ticket;
+        public List<Connection> data;
+        public AuthTicket ticket;
     }
 }

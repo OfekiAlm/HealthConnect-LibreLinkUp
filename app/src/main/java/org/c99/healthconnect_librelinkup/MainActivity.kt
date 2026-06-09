@@ -90,6 +90,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.c99.healthconnect_librelinkup.ui.theme.HealthConnectLibreLinkUpTheme
+import java.io.IOException
 
 data class LoginUiState(
     var url: String = "",
@@ -238,23 +239,30 @@ class MainActivity : ComponentActivity() {
     private fun onLoginButtonClicked() {
         if (viewModel.uiState.value.email.isNotBlank() && viewModel.uiState.value.password.isNotBlank()) {
             CoroutineScope(Dispatchers.Default).launch {
-                val loginResult =
-                    libreLinkUp.login(viewModel.uiState.value.email, viewModel.uiState.value.password)
-                if (loginResult != null && loginResult.status == 0) {
-                    libreLinkUp.authTicket = loginResult.data.authTicket
-                    libreLinkUp.user = loginResult.data.user
-                    CoroutineScope(Dispatchers.Main).launch {
-                        libreLinkUp.schedule()
-                    }
-                    viewModel.setStatus("Logged in as " + loginResult.data.user.firstName + " " + loginResult.data.user.lastName)
-                } else {
-                    if (loginResult != null) {
+                try {
+                    val loginResult =
+                        libreLinkUp.login(viewModel.uiState.value.email, viewModel.uiState.value.password)
+                    val loginData = loginResult.data
+                    val loginUser = loginData?.user
+                    val authTicket = loginData?.authTicket
+
+                    if (loginResult.status == 0 && loginUser != null && authTicket != null) {
+                        libreLinkUp.authTicket = authTicket
+                        libreLinkUp.user = loginUser
+                        CoroutineScope(Dispatchers.Main).launch {
+                            libreLinkUp.schedule()
+                        }
+                        viewModel.setStatus("Logged in as " + loginUser.firstName + " " + loginUser.lastName)
+                    } else {
                         if (loginResult.error != null) Log.e(
                             "Libre",
                             "Message: " + loginResult.error.message
                         )
+                        viewModel.setStatus(loginResult.error?.message ?: "Login failed. Check your username and password.")
                     }
-                    viewModel.setStatus("Login failed. Check your username and password.")
+                } catch (e: IOException) {
+                    Log.e("Libre", "Login request failed", e)
+                    viewModel.setStatus("Login failed. Please try again.")
                 }
             }
         }
