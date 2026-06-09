@@ -68,6 +68,13 @@
                 <data android:scheme="wear" android:host="*" />
             </intent-filter>
         </service>
+        <receiver
+            android:name=".RefreshReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.c99.healthconnect_librelinkup.action.REFRESH" />
+            </intent-filter>
+        </receiver>
         <uses-library
             android:name="com.google.android.wearable"
             android:required="true" />

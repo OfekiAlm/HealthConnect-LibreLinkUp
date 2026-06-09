@@ -21,14 +21,17 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.text.format.DateUtils
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -97,6 +100,8 @@ data class LoginUiState(
     var email: String = "",
     var password: String = "",
     var status: String = "",
+    var syncStatus: String = "",
+    var loggedIn: Boolean = false,
     var version: String = "Version",
     var isIgnoringBatteryOptimizations: Boolean = false
 )
@@ -119,6 +124,14 @@ class LoginViewModel: ViewModel() {
 
     fun setStatus(status: String) {
         _uiState.value = _uiState.value.copy(status = status)
+    }
+
+    fun setSyncStatus(syncStatus: String) {
+        _uiState.value = _uiState.value.copy(syncStatus = syncStatus)
+    }
+
+    fun setLoggedIn(loggedIn: Boolean) {
+        _uiState.value = _uiState.value.copy(loggedIn = loggedIn)
     }
 
     fun setVersion(version: String) {
@@ -144,11 +157,16 @@ class MainActivity : ComponentActivity() {
             MainView(
                 onUrlChanged = { libreLinkUp.setUrl(it) },
                 onLoginButtonClicked = { onLoginButtonClicked() },
+                onSyncNowClicked = { onSyncNowClicked() },
                 onDisableBatteryRestrictionsButtonClicked = { onDisableBatteryRestrictionsButtonClicked() }
             )
         }
 
+        Notifications.ensureChannel(this)
+        requestNotificationPermissionIfNeeded()
+
         viewModel.setUrl(libreLinkUp.url)
+        viewModel.setLoggedIn(libreLinkUp.isLoggedIn)
         val user = libreLinkUp.user
         if (user != null && user.email != null) {
             viewModel.setEmail(user.email)
@@ -226,6 +244,45 @@ class MainActivity : ComponentActivity() {
         viewModel.setIsIgnoringBatteryOptimizations(powerManager.isIgnoringBatteryOptimizations(
             packageName
         ))
+        viewModel.setLoggedIn(libreLinkUp.isLoggedIn)
+        refreshSyncStatus()
+    }
+
+    private fun refreshSyncStatus() {
+        val lastSuccess = SyncStatusStore.getLastSuccessAt(this)
+        val lastError = SyncStatusStore.getLastError(this)
+        val loginStatus = SyncStatusStore.getLoginStatus(this)
+
+        val text = when {
+            loginStatus == SyncStatusStore.LOGIN_STATUS_EXPIRED ->
+                "⚠️ Login expired. Please sign in again."
+            lastError != null && (lastSuccess == 0L || lastError.isNotEmpty()) && lastSuccess < SyncStatusStore.getLastAttemptAt(this) ->
+                "⚠️ Last sync failed: $lastError"
+            lastSuccess > 0L ->
+                "Last successful sync: " + DateUtils.getRelativeTimeSpanString(lastSuccess)
+            libreLinkUp.isLoggedIn ->
+                "Waiting for first sync…"
+            else -> ""
+        }
+        viewModel.setSyncStatus(text)
+    }
+
+    private val requestNotificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* no-op */ }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requestNotificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun onSyncNowClicked() {
+        if (!libreLinkUp.isLoggedIn) {
+            viewModel.setSyncStatus("Sign in before syncing.")
+            return
+        }
+        LibreLinkUp.syncNow(this)
+        viewModel.setSyncStatus("Sync requested…")
     }
 
     @SuppressLint("BatteryLife")
@@ -238,6 +295,7 @@ class MainActivity : ComponentActivity() {
 
     private fun onLoginButtonClicked() {
         if (viewModel.uiState.value.email.isNotBlank() && viewModel.uiState.value.password.isNotBlank()) {
+            viewModel.setStatus("Signing in…")
             CoroutineScope(Dispatchers.Default).launch {
                 try {
                     val loginResult =
@@ -249,20 +307,29 @@ class MainActivity : ComponentActivity() {
                     if (loginResult.status == 0 && loginUser != null && authTicket != null) {
                         libreLinkUp.authTicket = authTicket
                         libreLinkUp.user = loginUser
+                        SyncStatusStore.recordLoginStatus(this@MainActivity, SyncStatusStore.LOGIN_STATUS_OK)
+                        Notifications.clearLoginExpired(this@MainActivity)
                         CoroutineScope(Dispatchers.Main).launch {
                             libreLinkUp.schedule()
+                            LibreLinkUp.syncNow(this@MainActivity)
+                            viewModel.setLoggedIn(true)
                         }
                         viewModel.setStatus("Logged in as " + loginUser.firstName + " " + loginUser.lastName)
                     } else {
                         if (loginResult.error != null) Log.e(
                             "Libre",
-                            "Message: " + loginResult.error.message
+                            "Login rejected by server"
                         )
                         viewModel.setStatus(loginResult.error?.message ?: "Login failed. Check your username and password.")
                     }
                 } catch (e: IOException) {
-                    Log.e("Libre", "Login request failed", e)
-                    viewModel.setStatus("Login failed. Please try again.")
+                    Log.e("Libre", "Login request failed (network)", e)
+                    viewModel.setStatus("Login failed. Please check your connection and try again.")
+                } catch (e: Exception) {
+                    // Any unexpected error (e.g. keystore/parsing) must not crash the app from a
+                    // background coroutine; surface it to the user instead.
+                    Log.e("Libre", "Unexpected login failure: " + e.javaClass.simpleName, e)
+                    viewModel.setStatus("Login failed unexpectedly. Please try again.")
                 }
             }
         }
@@ -296,6 +363,7 @@ fun Modifier.autofill(
 fun MainView(viewModel: LoginViewModel = viewModel(),
              onUrlChanged: (String) -> Unit = {},
              onLoginButtonClicked: () -> Unit = {},
+             onSyncNowClicked: () -> Unit = {},
              onDisableBatteryRestrictionsButtonClicked: () -> Unit = {}) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
@@ -388,6 +456,21 @@ fun MainView(viewModel: LoginViewModel = viewModel(),
                     Text(stringResource(id = R.string.button_login))
                 }
                 Text(uiState.status)
+                if (uiState.loggedIn) {
+                    Button(
+                        onClick = { focusManager.clearFocus(); onSyncNowClicked() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(id = R.string.button_sync_now))
+                    }
+                }
+                if (uiState.syncStatus.isNotBlank()) {
+                    Text(
+                        text = uiState.syncStatus,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
                 Spacer(Modifier.weight(1f))
                 if(!uiState.isIgnoringBatteryOptimizations) {
                     Text(
@@ -399,6 +482,12 @@ fun MainView(viewModel: LoginViewModel = viewModel(),
                         Text(stringResource(id = R.string.disable_battery_restrictions))
                     }
                 }
+                Text(
+                    text = stringResource(id = R.string.safety_disclaimer),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Text(uiState.version)
             }
         }

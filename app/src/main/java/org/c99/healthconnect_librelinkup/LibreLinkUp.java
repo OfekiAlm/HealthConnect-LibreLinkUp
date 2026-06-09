@@ -22,8 +22,11 @@ import android.widget.Toast;
 
 import androidx.security.crypto.EncryptedSharedPreferences;
 import androidx.security.crypto.MasterKey;
+import androidx.work.BackoffPolicy;
 import androidx.work.Constraints;
+import androidx.work.ExistingWorkPolicy;
 import androidx.work.NetworkType;
+import androidx.work.OneTimeWorkRequest;
 import androidx.work.PeriodicWorkRequest;
 import androidx.work.WorkManager;
 
@@ -79,6 +82,10 @@ public class LibreLinkUp {
         );
     }
 
+    public static final String SYNC_TAG = "sync";
+    public static final String ONE_TIME_SYNC_WORK = "sync_now";
+    private static final String TAG = "LibreLinkUp";
+
     public void schedule() {
         WorkManager.getInstance(context).cancelAllWork();
 
@@ -86,11 +93,27 @@ public class LibreLinkUp {
             WorkManager.getInstance(context).enqueue(
                     new PeriodicWorkRequest.Builder(SyncWorker.class, 15, TimeUnit.MINUTES)
                             .setConstraints(new Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                            .addTag("sync")
+                            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                            .addTag(SYNC_TAG)
                             .build());
             Toast.makeText(context, "Glucose sync job scheduled", Toast.LENGTH_SHORT).show();
-            android.util.Log.i("LibreLinkUp", "Glucose sync job scheduled");
+            android.util.Log.i(TAG, "Periodic glucose sync job scheduled (15 min interval)");
         }
+    }
+
+    /**
+     * Enqueues a one-off sync that runs as soon as the network is available. Safe to call from the
+     * phone UI or from a watch-triggered refresh request.
+     */
+    public static void syncNow(Context context) {
+        OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(SyncWorker.class)
+                .setConstraints(new Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag(SYNC_TAG)
+                .build();
+        WorkManager.getInstance(context.getApplicationContext())
+                .enqueueUniqueWork(ONE_TIME_SYNC_WORK, ExistingWorkPolicy.REPLACE, request);
+        android.util.Log.i(TAG, "Manual one-time glucose sync requested");
     }
 
     public LibreLinkUp(Context context) {
@@ -179,6 +202,21 @@ public class LibreLinkUp {
 
     public User getUser() {
         return user;
+    }
+
+    public boolean isLoggedIn() {
+        return authTicket != null && authTicket.token != null && !authTicket.token.isEmpty();
+    }
+
+    /** Clears the stored session and stops background sync. */
+    public void logout() {
+        setAuthTicket(null);
+        setUser(null);
+        try {
+            WorkManager.getInstance(context).cancelAllWork();
+        } catch (Exception e) {
+            android.util.Log.w(TAG, "Failed to cancel work during logout");
+        }
     }
 
     public String AccountID() {

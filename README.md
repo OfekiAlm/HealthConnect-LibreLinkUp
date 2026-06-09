@@ -18,6 +18,11 @@
 
 Syncs the latest glucose reading from Freestyle Libre sensors via LibreLinkUp to HealthConnect and WearOS
 
+> ⚠️ **For informational use only.** This app is **not a medical device**, **not a replacement for
+> the official Libre apps**, and **not intended for emergency glucose decisions**. It makes no
+> FDA/CE or medical-compliance claims. All alerts and displays are convenience features only.
+> **Always verify critical glucose readings with your official device/app.**
+
 ![App Screenshot](app.png)
 
 ![Complication Screenshot](complication.png)

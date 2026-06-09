@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Devices
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.wear.protolayout.ActionBuilders
 import androidx.wear.protolayout.ColorBuilders.argb
 import androidx.wear.protolayout.DimensionBuilders.dp
 import androidx.wear.protolayout.LayoutElementBuilders
@@ -165,7 +166,10 @@ private fun tileLayout(context: Context, glucose: Float, arrow: String, color: I
             .setColor(argb(Colors.DEFAULT.onSurface))
             .build())
         .setContent(
-            Chip.Builder(context, ModifiersBuilders.Clickable.Builder().build(), buildDeviceParameters(context.resources))
+            Chip.Builder(context, ModifiersBuilders.Clickable.Builder()
+                .setId("refresh")
+                .setOnClick(ActionBuilders.LoadAction.Builder().build())
+                .build(), buildDeviceParameters(context.resources))
                 .setChipColors(ChipColors(argb(color), argb(context.getColor(R.color.glucose_text))))
                 .setCustomContent(
                     LayoutElementBuilders.Row.Builder()

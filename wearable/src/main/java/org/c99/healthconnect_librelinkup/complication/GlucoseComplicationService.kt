@@ -17,23 +17,25 @@
 package org.c99.healthconnect_librelinkup.complication
 
 import android.annotation.SuppressLint
+import android.app.PendingIntent
+import android.content.Intent
 import android.graphics.drawable.Icon
 import androidx.wear.watchface.complications.data.ComplicationData
 import androidx.wear.watchface.complications.data.ComplicationType
 import androidx.wear.watchface.complications.data.MonochromaticImage
-import androidx.wear.watchface.complications.data.NoDataComplicationData
 import androidx.wear.watchface.complications.data.PlainComplicationText
 import androidx.wear.watchface.complications.data.ShortTextComplicationData
 import androidx.wear.watchface.complications.datasource.ComplicationRequest
 import androidx.wear.watchface.complications.datasource.SuspendingComplicationDataSourceService
 import org.c99.healthconnect_librelinkup.DataLayerListenerService
 import org.c99.healthconnect_librelinkup.R
+import org.c99.healthconnect_librelinkup.RefreshReceiver
 
 class GlucoseComplicationService : SuspendingComplicationDataSourceService() {
 
     override fun getPreviewData(type: ComplicationType): ComplicationData? {
         if (type != ComplicationType.SHORT_TEXT) {
-            return NoDataComplicationData()
+            return null
         }
         return createComplicationData(Icon.createWithResource(this, R.drawable.water_drop), "99")
     }
@@ -52,30 +54,42 @@ class GlucoseComplicationService : SuspendingComplicationDataSourceService() {
                     else -> Icon.createWithResource(this, R.drawable.water_drop)
                 }
 
-                if (glucose.getInt(DataLayerListenerService.UNITS_KEY, 1) == 1) {
-                    return createComplicationData(
-                        icon,
-                        String.format("%.0f", glucose.getFloat(DataLayerListenerService.GLUCOSE_KEY, 0f))
-                    )
+                val text = if (glucose.getInt(DataLayerListenerService.UNITS_KEY, 1) == 1) {
+                    String.format("%.0f", glucose.getFloat(DataLayerListenerService.GLUCOSE_KEY, 0f))
                 } else {
-                    return createComplicationData(
-                        icon,
-                        String.format("%.1f", glucose.getFloat(DataLayerListenerService.GLUCOSE_KEY, 0f))
-                    )
+                    String.format("%.1f", glucose.getFloat(DataLayerListenerService.GLUCOSE_KEY, 0f))
                 }
-
+                return createComplicationData(icon, text)
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        return NoDataComplicationData()
+        // Never render blank: show a clear "no data" placeholder that the user can tap to refresh.
+        return createComplicationData(
+            Icon.createWithResource(this, R.drawable.water_drop),
+            "--",
+            "No glucose data yet"
+        )
     }
 
-    private fun createComplicationData(icon: Icon, glucose: String) =
+    private fun refreshTapAction(): PendingIntent {
+        val intent = Intent(this, RefreshReceiver::class.java).apply {
+            action = RefreshReceiver.ACTION_REFRESH
+        }
+        return PendingIntent.getBroadcast(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
+    private fun createComplicationData(icon: Icon, glucose: String, description: String = glucose) =
         ShortTextComplicationData.Builder(
             text = PlainComplicationText.Builder(glucose).build(),
-            contentDescription = PlainComplicationText.Builder(glucose).build()
+            contentDescription = PlainComplicationText.Builder(description).build()
         )
         .setMonochromaticImage(MonochromaticImage.Builder(image = icon).build())
+        .setTapAction(refreshTapAction())
         .build()
 }
