@@ -4,10 +4,14 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: scripts/verify-release-build.sh [--verify-install] [--app-only|--wear-only] [--skip-clean]
+Usage: scripts/verify-release-build.sh [--verify-install] [--with-wear|--app-only|--wear-only] [--clean|--skip-clean]
 
 Builds the release APKs, signs them with a provided keystore, verifies the
 signatures, and optionally installs them onto connected devices.
+
+By default, this script builds the phone app only. Pass --with-wear to also
+build the Wear OS APK.
+By default, clean is skipped for build stability in constrained environments.
 
 Required environment variables:
   ANDROID_SDK_ROOT or ANDROID_HOME
@@ -55,8 +59,8 @@ require_file() {
 
 VERIFY_INSTALL=0
 RUN_APP=1
-RUN_WEAR=1
-RUN_CLEAN=1
+RUN_WEAR=0
+RUN_CLEAN=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -64,13 +68,21 @@ while [[ $# -gt 0 ]]; do
             VERIFY_INSTALL=1
             ;;
         --app-only)
+            RUN_APP=1
             RUN_WEAR=0
+            ;;
+        --with-wear)
+            RUN_WEAR=1
             ;;
         --wear-only)
             RUN_APP=0
+            RUN_WEAR=1
             ;;
         --skip-clean)
             RUN_CLEAN=0
+            ;;
+        --clean)
+            RUN_CLEAN=1
             ;;
         -h|--help)
             usage
@@ -109,6 +121,10 @@ require_command keytool
 [[ -n "$KEYSTORE_PASSWORD" ]] || fail "KEYSTORE_PASSWORD must be set"
 require_file "$KEYSTORE_PATH"
 
+if (( RUN_CLEAN == 1 )) && [[ "$KEYSTORE_PATH" == "$REPO_ROOT/build/"* ]]; then
+    fail "KEYSTORE_PATH points inside $REPO_ROOT/build and will be removed by clean. Use a keystore outside build/ or pass --skip-clean"
+fi
+
 if [[ -z "$BUILD_TOOLS_VERSION" ]]; then
     build_tools_root="$ANDROID_SDK_ROOT/build-tools"
     [[ -d "$build_tools_root" ]] || fail "Android build-tools directory not found: $build_tools_root"
@@ -141,10 +157,28 @@ if (( RUN_WEAR == 1 )); then
 fi
 
 log "Building release APKs with Gradle"
-(
-    cd "$REPO_ROOT"
-    "$GRADLEW" --no-daemon "${gradle_tasks[@]}"
-)
+run_gradle() {
+    local -a tasks=("$@")
+    local attempt
+    local max_attempts=2
+
+    for (( attempt=1; attempt<=max_attempts; attempt++ )); do
+        if (
+            cd "$REPO_ROOT"
+            "$GRADLEW" --no-daemon "${tasks[@]}"
+        ); then
+            return 0
+        fi
+
+        if (( attempt < max_attempts )); then
+            log "Gradle build failed (attempt $attempt/$max_attempts); retrying once"
+        fi
+    done
+
+    fail "Gradle build failed after $max_attempts attempts"
+}
+
+run_gradle "${gradle_tasks[@]}"
 
 find_unsigned_apk() {
     local module="$1"
